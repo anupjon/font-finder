@@ -8,6 +8,17 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [fontData, setFontData] = useState(null);
+  const [copiedFont, setCopiedFont] = useState(null);
+
+  // Function to copy text to clipboard
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedFont(text);
+      setTimeout(() => setCopiedFont(null), 2000); // Reset after 2 seconds
+    }).catch(err => {
+      console.error('Failed to copy: ', err);
+    });
+  };
 
   // Function to extract unique font families from CSS Source Files
   const getUniqueFontFamilies = (cssSourceFiles) => {
@@ -138,17 +149,39 @@ export default function Home() {
                         key={`unique-font-${index}`} 
                         className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg"
                       >
-                        <div className="flex flex-col">
+                        <div className="flex flex-col h-full">
                           <div 
-                            className="text-base mb-2"
+                            className="text-base mb-2 flex-grow"
                             style={{ fontFamily: fontFamily }}
                           >
                             {fontFamily}
                           </div>
-                          <div className="mt-auto">
+                          <div className="mt-auto flex justify-between items-center">
                             <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
                               Font Family
                             </span>
+                            <button
+                              onClick={() => copyToClipboard(fontFamily)}
+                              className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1"
+                              title="Copy font family name to clipboard"
+                            >
+                              {copiedFont === fontFamily ? (
+                                <>
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                  Copied!
+                                </>
+                              ) : (
+                                <>
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                                  </svg>
+                                  Copy
+                                </>
+                              )}
+                            </button>
                           </div>
                         </div>
                       </div>
