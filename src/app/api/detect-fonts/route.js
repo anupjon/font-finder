@@ -47,6 +47,9 @@ async function detectFonts(url) {
     const adobeFonts = [];
     const cssImportFonts = [];
     const preloadedFonts = [];
+    
+    // NEW: Keep track of CSS source files and their font-family declarations
+    const cssSourceFiles = [];
 
     // Extract Google Fonts
     $('link[rel="stylesheet"]').each((_, el) => {
@@ -150,15 +153,30 @@ async function detectFonts(url) {
       const href = $(el).attr('href');
       if (href && href !== '') {
         // Convert to absolute URL if needed
-        const absoluteUrl = new URL(href, url).href;
-        stylesheetUrls.push(absoluteUrl);
+        try {
+          const absoluteUrl = new URL(href, url).href;
+          stylesheetUrls.push(absoluteUrl);
+        } catch (e) {
+          console.error(`Error creating absolute URL from ${href}: ${e.message}`);
+        }
       }
     });
 
     // Extract style tags
     const styleTags = [];
     $('style').each((_, el) => {
-      styleTags.push($(el).html());
+      const content = $(el).html();
+      if (content) {
+        styleTags.push(content);
+        
+        // Add inline style tags to CSS source files
+        cssSourceFiles.push({
+          source: 'inline <style> tag',
+          url: null,
+          content,
+          fontFamilies: extractFontFamiliesFromCSS(content)
+        });
+      }
     });
 
     // Extract CSS @import fonts from style tags
@@ -219,6 +237,14 @@ async function detectFonts(url) {
         
         if (cssResponse.status === 200) {
           const cssContent = cssResponse.data;
+          
+          // Add to CSS source files
+          cssSourceFiles.push({
+            source: 'external CSS file',
+            url: cssUrl,
+            content: cssContent,
+            fontFamilies: extractFontFamiliesFromCSS(cssContent)
+          });
           
           // Check for font file references
           const urlRegex = /url\(['"]?([^'"\)]+\.(?:woff2?|ttf|otf|eot))['"]?\)/g;
@@ -315,11 +341,66 @@ async function detectFonts(url) {
       preloadedFonts,
       cssImportFonts,
       systemFontStacks,
-      computedFonts
+      computedFonts,
+      // Add CSS source files to the response
+      cssSourceFiles
     };
 
   } catch (error) {
     console.error('Error in detectFonts:', error);
     throw error;
   }
+}
+
+/**
+ * Extract all font-family declarations from CSS content
+ * @param {string} css - The CSS content to analyze
+ * @returns {Array} - Array of font family declarations with their property context
+ */
+function extractFontFamiliesFromCSS(css) {
+  if (!css) return [];
+  
+  const fontFamilies = [];
+  
+  // Pattern to match font-family declarations
+  const fontFamilyRegex = /([^{}]*){[^{}]*font-family\s*:\s*([^;}]+)[^}]*}/gi;
+  
+  let match;
+  while ((match = fontFamilyRegex.exec(css)) !== null) {
+    const selector = match[1].trim();
+    let fontFamily = match[2].trim();
+    
+    // Clean up font family (remove quotes, etc.)
+    fontFamily = fontFamily.replace(/["']/g, '');
+    
+    fontFamilies.push({
+      selector,
+      value: fontFamily
+    });
+  }
+  
+  // Also match shorthand font property
+  const fontShorthandRegex = /([^{}]*){[^{}]*font\s*:\s*([^;}]+)[^}]*}/gi;
+  while ((match = fontShorthandRegex.exec(css)) !== null) {
+    const selector = match[1].trim();
+    const fontValue = match[2].trim();
+    
+    // Try to extract font-family from shorthand
+    // Font shorthand: font: [font-style] [font-variant] [font-weight] [font-size]/[line-height] [font-family];
+    const parts = fontValue.split(' ');
+    if (parts.length >= 2) {
+      // Last part(s) should be the font-family
+      // Check if there are commas which would indicate multiple font families
+      const fontFamilyPart = parts.slice(-1)[0];
+      if (fontFamilyPart && !fontFamilyPart.match(/^\d/)) {
+        fontFamilies.push({
+          selector,
+          value: fontFamilyPart.replace(/["']/g, ''),
+          shorthand: true
+        });
+      }
+    }
+  }
+  
+  return fontFamilies;
 }

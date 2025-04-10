@@ -9,6 +9,41 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [fontData, setFontData] = useState(null);
 
+  // Function to extract unique font families from CSS Source Files
+  const getUniqueFontFamilies = (cssSourceFiles) => {
+    if (!cssSourceFiles || !Array.isArray(cssSourceFiles)) {
+      return [];
+    }
+
+    // Set to store unique font families
+    const uniqueFontFamilies = new Set();
+    
+    // Process each CSS file
+    cssSourceFiles.forEach(cssFile => {
+      if (cssFile.fontFamilies && Array.isArray(cssFile.fontFamilies)) {
+        cssFile.fontFamilies.forEach(fontFamily => {
+          // Split comma-separated font families and process each one
+          if (fontFamily.value) {
+            fontFamily.value.split(',').forEach(font => {
+              // Clean up font name and add to set if not a generic family
+              const cleanedFont = font.trim().toLowerCase();
+              if (cleanedFont && 
+                  !['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system', 
+                   'blinkmacsystemfont', 'segoe ui', 'roboto', 'helvetica', 'arial', 'sans-serif'].includes(cleanedFont)) {
+                uniqueFontFamilies.add(font.trim());
+              }
+            });
+          }
+        });
+      }
+    });
+    
+    // Convert set to array and sort alphabetically
+    return Array.from(uniqueFontFamilies).sort((a, b) => 
+      a.toLowerCase().localeCompare(b.toLowerCase())
+    );
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -88,6 +123,127 @@ export default function Home() {
             <h2 className="text-xl font-semibold border-b pb-2">
               Fonts detected on {url}
             </h2>
+            
+            {/* New section: All Font Families (Consolidated List) */}
+            <section>
+              <h3 className="text-lg font-medium mb-3">All Font Families</h3>
+              {fontData.cssSourceFiles && fontData.cssSourceFiles.length > 0 ? (
+                <div>
+                  <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
+                    Unique font families found in CSS (excluding system fonts):
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    {getUniqueFontFamilies(fontData.cssSourceFiles).map((fontFamily, index) => (
+                      <div 
+                        key={`unique-font-${index}`} 
+                        className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg"
+                      >
+                        <div className="flex flex-col">
+                          <div 
+                            className="text-base mb-2"
+                            style={{ fontFamily: fontFamily }}
+                          >
+                            {fontFamily}
+                          </div>
+                          <div className="mt-auto">
+                            <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+                              Font Family
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {getUniqueFontFamilies(fontData.cssSourceFiles).length === 0 && (
+                    <p className="text-gray-500 dark:text-gray-400">
+                      No custom font families detected
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-gray-500 dark:text-gray-400">No CSS source files detected</p>
+              )}
+            </section>
+            
+            {/* Add new CSS Source Files section */}
+            <section>
+              <h3 className="text-lg font-medium mb-3">CSS Source Files</h3>
+              {fontData.cssSourceFiles && fontData.cssSourceFiles.length > 0 ? (
+                <div className="space-y-6">
+                  {fontData.cssSourceFiles.map((cssFile, index) => (
+                    <div key={`css-source-${index}`} className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg">
+                      <div className="flex flex-wrap items-center justify-between mb-2 gap-2">
+                        <h4 className="font-medium">
+                          {cssFile.source}
+                          {cssFile.url && 
+                            <span className="text-gray-500 dark:text-gray-400 ml-2 text-sm">
+                              (<a href={cssFile.url} target="_blank" rel="noopener noreferrer" className="hover:underline text-blue-600 dark:text-blue-400">
+                                {cssFile.url.length > 50 ? cssFile.url.substring(0, 50) + '...' : cssFile.url}
+                              </a>)
+                            </span>
+                          }
+                        </h4>
+                        <span className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">
+                          {cssFile.fontFamilies.length} font-family declarations
+                        </span>
+                      </div>
+                      
+                      {cssFile.fontFamilies.length > 0 ? (
+                        <div className="border dark:border-gray-700 rounded-md overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-100 dark:bg-gray-900">
+                              <tr>
+                                <th className="py-2 px-3 text-left">Selector</th>
+                                <th className="py-2 px-3 text-left">Font Family</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {cssFile.fontFamilies.map((fontFamily, fontIndex) => (
+                                <tr 
+                                  key={`font-family-${fontIndex}`}
+                                  className="border-t dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-750"
+                                >
+                                  <td className="py-2 px-3 font-mono text-xs break-all">
+                                    {fontFamily.selector}
+                                  </td>
+                                  <td 
+                                    className="py-2 px-3"
+                                    style={{ fontFamily: fontFamily.value }}
+                                  >
+                                    {fontFamily.value}
+                                    {fontFamily.shorthand && (
+                                      <span className="ml-2 text-xs bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 px-1 py-0.5 rounded">
+                                        shorthand
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+                          No font-family declarations found
+                        </p>
+                      )}
+                      
+                      <details className="mt-3">
+                        <summary className="cursor-pointer text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300">
+                          View CSS Source
+                        </summary>
+                        <pre className="mt-2 p-3 bg-gray-100 dark:bg-gray-900 rounded-md overflow-x-auto text-xs">
+                          <code>{cssFile.content}</code>
+                        </pre>
+                      </details>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 dark:text-gray-400">No CSS source files detected</p>
+              )}
+            </section>
             
             {/* Google Fonts */}
             <section>
