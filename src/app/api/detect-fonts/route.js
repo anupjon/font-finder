@@ -1,7 +1,6 @@
-import puppeteer from 'puppeteer';
-import cheerio from 'cheerio';
 import { NextResponse } from 'next/server';
 import axios from 'axios';
+import { load } from 'cheerio';
 
 export async function POST(request) {
   try {
@@ -31,283 +30,283 @@ export async function POST(request) {
 }
 
 async function detectFonts(url) {
-  const browser = await puppeteer.launch({ headless: 'new' });
   try {
-    const page = await browser.newPage();
-    
-    // Track all requests for font files
-    const fontFiles = new Set();
-    page.on('response', async (response) => {
-      const url = response.url();
-      const contentType = response.headers()['content-type'];
-      
-      if (
-        contentType && 
-        (contentType.includes('font') || 
-         url.match(/\.(woff2?|ttf|otf|eot)($|\?)/i))
-      ) {
-        fontFiles.add({ 
-          url, 
-          type: 'font-file', 
-          format: url.match(/\.([^.?]+)($|\?)/i)?.[1] 
-        });
+    // Fetch the HTML content of the page
+    const response = await axios.get(url, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
       }
     });
+
+    // Extract data using cheerio
+    const $ = load(response.data);
     
-    // Navigate to URL with timeout
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    
-    // Extract Google Fonts
+    // Store all font data
     const googleFonts = [];
-    const links = await page.$$eval('link[rel="stylesheet"]', links => {
-      return links.map(link => link.href);
+    const adobeFonts = [];
+    const cssImportFonts = [];
+    const preloadedFonts = [];
+
+    // Extract Google Fonts
+    $('link[rel="stylesheet"]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && href.includes('fonts.googleapis.com')) {
+        const fontNames = href.match(/family=([^&]+)/i)?.[1];
+        if (fontNames) {
+          const families = fontNames.split('|').map(font => {
+            const baseName = font.split(':')[0].replace(/\+/g, ' ');
+            return {
+              name: baseName,
+              url: href,
+              type: 'google-font'
+            };
+          });
+          googleFonts.push(...families);
+        }
+      }
     });
-    
-    const googleFontLinks = links.filter(link => 
-      link.includes('fonts.googleapis.com')
-    );
-    
-    for (const fontLink of googleFontLinks) {
-      const fontNames = fontLink.match(/family=([^&]+)/i)?.[1];
-      if (fontNames) {
-        const fonts = fontNames.split('|').map(font => {
-          const baseName = font.split(':')[0].replace(/\+/g, ' ');
-          return {
-            name: baseName,
-            url: fontLink,
-            type: 'google-font'
-          };
+
+    // Extract Adobe Fonts (TypeKit)
+    const typekitLinks = [];
+    $('link[rel="stylesheet"]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && (href.includes('use.typekit.net') || href.includes('use.edgefonts.net'))) {
+        typekitLinks.push(href);
+      }
+    });
+
+    // Fetch and parse Adobe font CSS content
+    for (const typekitUrl of typekitLinks) {
+      try {
+        const response = await axios.get(typekitUrl, {
+          timeout: 5000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+          }
         });
-        googleFonts.push(...fonts);
+        
+        if (response.status === 200) {
+          const cssContent = response.data;
+          
+          // Extract font families from the CSS content
+          const fontFamilyRegex = /@font-face\s*{[^}]*font-family\s*:\s*["']([^"']+)["'][^}]*}/g;
+          const fontWeightRegex = /font-weight\s*:\s*(\d+|normal|bold|lighter|bolder)/;
+          const fontStyleRegex = /font-style\s*:\s*(normal|italic|oblique)/;
+          
+          let match;
+          const extractedFonts = new Set();
+          const fontDetails = [];
+          
+          while ((match = fontFamilyRegex.exec(cssContent)) !== null) {
+            const fontFamilyMatch = match[0];
+            const fontFamily = match[1];
+            
+            // If we haven't seen this font family yet, add it
+            if (!extractedFonts.has(fontFamily)) {
+              extractedFonts.add(fontFamily);
+              
+              // Extract weight and style if available
+              const weightMatch = fontFamilyMatch.match(fontWeightRegex);
+              const styleMatch = fontFamilyMatch.match(fontStyleRegex);
+              
+              fontDetails.push({
+                name: fontFamily,
+                weight: weightMatch ? weightMatch[1] : 'normal',
+                style: styleMatch ? styleMatch[1] : 'normal'
+              });
+            }
+          }
+          
+          // Add the Adobe Fonts with extracted details
+          adobeFonts.push({
+            type: 'adobe-font',
+            url: typekitUrl,
+            projectId: typekitUrl.split('/').pop().split('.')[0],
+            fonts: fontDetails
+          });
+        }
+      } catch (error) {
+        console.error(`Error fetching Adobe Fonts CSS: ${error.message}`);
       }
     }
-    
-    // Extract Adobe Fonts (Typekit) - Enhanced to fetch actual font details
-    const adobeFonts = [];
-    const typekitLinks = links.filter(link => 
-      link.includes('use.typekit.net') || link.includes('use.edgefonts.net')
-    );
-    
-    if (typekitLinks.length > 0) {
-      // Fetch each Adobe Fonts CSS file to extract actual font details
-      for (const typekitUrl of typekitLinks) {
-        try {
-          const response = await axios.get(typekitUrl, {
-            timeout: 5000,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-            }
+
+    // Extract preloaded fonts
+    $('link[rel="preload"][as="font"]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href) {
+        preloadedFonts.push({
+          url: href,
+          type: 'preloaded-font',
+          format: $(el).attr('type')?.replace('font/', '') || 
+                 href.match(/\.([^.?]+)($|\?)/i)?.[1] || 'unknown'
+        });
+      }
+    });
+
+    // Collect all stylesheets
+    const stylesheetUrls = [];
+    $('link[rel="stylesheet"]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && href !== '') {
+        // Convert to absolute URL if needed
+        const absoluteUrl = new URL(href, url).href;
+        stylesheetUrls.push(absoluteUrl);
+      }
+    });
+
+    // Extract style tags
+    const styleTags = [];
+    $('style').each((_, el) => {
+      styleTags.push($(el).html());
+    });
+
+    // Extract CSS @import fonts from style tags
+    const cssImportRegex = /@import\s+(?:url\()?['"]([^'"]+)['"]\)?;/g;
+    for (const styleTag of styleTags) {
+      let importMatch;
+      while ((importMatch = cssImportRegex.exec(styleTag)) !== null) {
+        const importUrl = importMatch[1];
+        if (
+          importUrl.includes('fonts.googleapis.com') || 
+          importUrl.includes('fonts.') ||
+          importUrl.includes('/fonts/') ||
+          importUrl.match(/\.(woff2?|ttf|otf|eot)($|\?)/i)
+        ) {
+          cssImportFonts.push({
+            url: importUrl,
+            type: 'css-import-font'
           });
+        }
+      }
+    }
+
+    // Extract font-face declarations from stylesheets
+    const fontFaceDeclarations = [];
+    for (const styleText of styleTags) {
+      const fontFaceRegex = /@font-face\s*{([^}]*)}/g;
+      let match;
+      while ((match = fontFaceRegex.exec(styleText)) !== null) {
+        const declaration = match[1];
+        const fontFamily = declaration.match(/font-family\s*:\s*["']?([^"';]*)["']?/i)?.[1];
+        const fontSrc = declaration.match(/src\s*:\s*([^;]*)/i)?.[1];
+        const fontWeight = declaration.match(/font-weight\s*:\s*([^;]*)/i)?.[1] || 'normal';
+        const fontStyle = declaration.match(/font-style\s*:\s*([^;]*)/i)?.[1] || 'normal';
+        const fontDisplay = declaration.match(/font-display\s*:\s*([^;]*)/i)?.[1] || '';
+        
+        if (fontFamily) {
+          fontFaceDeclarations.push({
+            fontFamily,
+            src: fontSrc || '',
+            style: fontStyle,
+            weight: fontWeight,
+            display: fontDisplay
+          });
+        }
+      }
+    }
+
+    // Try to fetch external CSS files to find more fonts
+    const fontFiles = new Set();
+    for (const cssUrl of stylesheetUrls) {
+      try {
+        const cssResponse = await axios.get(cssUrl, {
+          timeout: 5000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+          }
+        });
+        
+        if (cssResponse.status === 200) {
+          const cssContent = cssResponse.data;
           
-          if (response.status === 200) {
-            const cssContent = response.data;
+          // Check for font file references
+          const urlRegex = /url\(['"]?([^'"\)]+\.(?:woff2?|ttf|otf|eot))['"]?\)/g;
+          let urlMatch;
+          while ((urlMatch = urlRegex.exec(cssContent)) !== null) {
+            const fontUrl = urlMatch[1];
+            const absoluteFontUrl = new URL(fontUrl, cssUrl).href;
             
-            // Extract font families from the CSS content
-            const fontFamilyRegex = /@font-face\s*{[^}]*font-family\s*:\s*["']([^"']+)["'][^}]*}/g;
-            const fontWeightRegex = /font-weight\s*:\s*(\d+|normal|bold|lighter|bolder)/;
-            const fontStyleRegex = /font-style\s*:\s*(normal|italic|oblique)/;
-            
-            let match;
-            const extractedFonts = new Set();
-            const fontDetails = [];
-            
-            while ((match = fontFamilyRegex.exec(cssContent)) !== null) {
-              const fontFamilyMatch = match[0];
-              const fontFamily = match[1];
-              
-              // If we haven't seen this font family yet, add it
-              if (!extractedFonts.has(fontFamily)) {
-                extractedFonts.add(fontFamily);
-                
-                // Extract weight and style if available
-                const weightMatch = fontFamilyMatch.match(fontWeightRegex);
-                const styleMatch = fontFamilyMatch.match(fontStyleRegex);
-                
-                fontDetails.push({
-                  name: fontFamily,
-                  weight: weightMatch ? weightMatch[1] : 'normal',
-                  style: styleMatch ? styleMatch[1] : 'normal'
-                });
-              }
-            }
-            
-            // Add the Adobe Fonts with extracted details
-            adobeFonts.push({
-              type: 'adobe-font',
-              url: typekitUrl,
-              projectId: typekitUrl.split('/').pop().split('.')[0],
-              fonts: fontDetails
+            fontFiles.add({ 
+              url: absoluteFontUrl, 
+              type: 'font-file', 
+              format: fontUrl.match(/\.([^.?]+)($|\?)/i)?.[1] 
             });
           }
-        } catch (error) {
-          console.error(`Error fetching Adobe Fonts CSS: ${error.message}`);
-        }
-      }
-    }
-    
-    // Extract preloaded fonts
-    const preloadedFonts = await page.$$eval('link[rel="preload"][as="font"]', links => {
-      return links.map(link => ({
-        url: link.href,
-        type: 'preloaded-font',
-        format: link.getAttribute('type')?.replace('font/', '') || 
-               link.href.match(/\.([^.?]+)($|\?)/i)?.[1] || 'unknown'
-      }));
-    });
-    
-    // NEW: Extract CSS @import rules for fonts
-    const cssImportFonts = await page.evaluate(() => {
-      const importFonts = [];
-      for (const sheet of document.styleSheets) {
-        try {
-          for (const rule of sheet.cssRules || []) {
-            if (rule.type === CSSRule.IMPORT_RULE) {
-              const importUrl = rule.href || '';
-              
-              if (
-                importUrl.includes('fonts.googleapis.com') || 
-                importUrl.includes('fonts.') ||
-                importUrl.includes('/fonts/') ||
-                importUrl.match(/\.(woff2?|ttf|otf|eot)($|\?)/i)
-              ) {
-                importFonts.push({
-                  url: importUrl,
-                  type: 'css-import-font'
-                });
-              }
-            }
-          }
-        } catch (e) {
-          // Skip CORS-restricted stylesheets
-        }
-      }
-      return importFonts;
-    });
-    
-    // Extract @font-face declarations with enhanced detection
-    const fontFaceDeclarations = await page.evaluate(() => {
-      const fontFaces = [];
-      for (const sheet of document.styleSheets) {
-        try {
-          for (const rule of sheet.cssRules || []) {
-            if (rule.type === CSSRule.FONT_FACE_RULE) {
-              const fontFamily = rule.style.getPropertyValue('font-family').replace(/["']/g, '');
-              const fontSrc = rule.style.getPropertyValue('src');
-              const fontStyle = rule.style.getPropertyValue('font-style') || 'normal';
-              const fontWeight = rule.style.getPropertyValue('font-weight') || 'normal';
-              const fontDisplay = rule.style.getPropertyValue('font-display') || '';
-              
-              fontFaces.push({
+          
+          // Check for more @font-face declarations
+          const fontFaceRegex = /@font-face\s*{([^}]*)}/g;
+          let fontFaceMatch;
+          while ((fontFaceMatch = fontFaceRegex.exec(cssContent)) !== null) {
+            const declaration = fontFaceMatch[1];
+            const fontFamily = declaration.match(/font-family\s*:\s*["']?([^"';]*)["']?/i)?.[1];
+            const fontSrc = declaration.match(/src\s*:\s*([^;]*)/i)?.[1];
+            const fontWeight = declaration.match(/font-weight\s*:\s*([^;]*)/i)?.[1] || 'normal';
+            const fontStyle = declaration.match(/font-style\s*:\s*([^;]*)/i)?.[1] || 'normal';
+            const fontDisplay = declaration.match(/font-display\s*:\s*([^;]*)/i)?.[1] || '';
+            
+            if (fontFamily) {
+              fontFaceDeclarations.push({
                 fontFamily,
-                src: fontSrc,
+                src: fontSrc || '',
                 style: fontStyle,
                 weight: fontWeight,
                 display: fontDisplay
               });
             }
           }
-        } catch (e) {
-          // Skip CORS-restricted stylesheets
         }
+      } catch (error) {
+        console.error(`Error fetching CSS: ${cssUrl}: ${error.message}`);
       }
-      return fontFaces;
-    });
-    
-    // NEW: Extract CSS variables that might contain font declarations
-    const cssVarFonts = await page.evaluate(() => {
-      const rootStyles = getComputedStyle(document.documentElement);
-      const fontVars = [];
-      
-      for (let i = 0; i < rootStyles.length; i++) {
-        const prop = rootStyles[i];
-        if (prop.startsWith('--') && 
-            (prop.includes('font') || prop.includes('typeface') || prop.includes('text'))) {
-          const value = rootStyles.getPropertyValue(prop).trim();
-          if (value && !value.startsWith('var(')) {
-            fontVars.push({
-              variable: prop,
-              value,
-              type: 'css-variable-font'
-            });
-          }
-        }
+    }
+
+    // Estimate system font stacks
+    const systemFontStacks = [];
+    // Since we can't execute JS to get computed styles, look for common patterns
+    const fontFamilyRegex = /font-family\s*:\s*([^;]+)/gi;
+    const allCSS = styleTags.join(' ') + response.data;
+    let fontFamilyMatch;
+    while ((fontFamilyMatch = fontFamilyRegex.exec(allCSS)) !== null) {
+      const fontFamily = fontFamilyMatch[1];
+      if (
+        fontFamily.includes('system-ui') || 
+        fontFamily.includes('-apple-system') ||
+        fontFamily.includes('BlinkMacSystemFont') ||
+        fontFamily.includes('Segoe UI') ||
+        fontFamily.includes('Roboto') ||
+        fontFamily.includes('Helvetica Neue') ||
+        fontFamily.includes('Arial')
+      ) {
+        systemFontStacks.push({
+          stack: fontFamily,
+          type: 'system-font-stack'
+        });
       }
-      return fontVars;
-    });
-    
-    // NEW: Detect fonts loaded via Font API (JavaScript)
-    const fontApiLoaded = await page.evaluate(() => {
-      if (!window.performance || !window.performance.getEntriesByType) {
-        return [];
-      }
+    }
+
+    // Extract all font-family properties to estimate computed fonts
+    const computedFontFamilies = new Set();
+    const fontFamiliesInCSS = allCSS.match(/font-family\s*:\s*([^;]+);/gi) || [];
+    for (const fontFamilyRule of fontFamiliesInCSS) {
+      const fontFamily = fontFamilyRule
+        .replace(/font-family\s*:\s*/i, '')
+        .replace(/;/g, '')
+        .trim();
       
-      // Check performance entries for font loads
-      const resources = window.performance.getEntriesByType('resource');
-      const fontResources = resources.filter(resource => {
-        return resource.initiatorType === 'css' || 
-              (resource.name && 
-                (resource.name.includes('/fonts/') || 
-                 resource.name.match(/\.(woff2?|ttf|otf|eot)($|\?)/i)));
-      }).map(resource => ({
-        url: resource.name,
-        loadTime: resource.duration,
-        type: 'performance-loaded-font'
-      }));
-      
-      return fontResources;
-    });
+      fontFamily.split(',')
+        .map(f => f.trim().replace(/["']/g, ''))
+        .filter(f => !['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system'].includes(f))
+        .forEach(f => {
+          if (f) computedFontFamilies.add(f);
+        });
+    }
     
-    // Get computed styles from different elements (improved)
-    const computedFonts = await page.evaluate(() => {
-      const fonts = new Set();
-      const elements = document.querySelectorAll('*');
-      elements.forEach(el => {
-        const style = window.getComputedStyle(el);
-        const fontFamily = style.getPropertyValue('font-family');
-        if (fontFamily) fonts.add(fontFamily);
-      });
-      
-      // NEW: Check for shadow DOM elements that might contain their own fonts
-      elements.forEach(el => {
-        if (el.shadowRoot) {
-          const shadowElements = el.shadowRoot.querySelectorAll('*');
-          shadowElements.forEach(shadowEl => {
-            const shadowStyle = window.getComputedStyle(shadowEl);
-            const shadowFontFamily = shadowStyle.getPropertyValue('font-family');
-            if (shadowFontFamily) fonts.add(shadowFontFamily);
-          });
-        }
-      });
-      
-      return Array.from(fonts);
-    });
-    
-    // Clean and format computed fonts
-    const cleanedComputedFonts = computedFonts.map(font => {
-      return {
-        name: font.split(',')
-          .map(f => f.trim().replace(/["']/g, ''))
-          .filter(f => !['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system'].includes(f))
-          .join(', '),
-        type: 'computed-font'
-      };
-    }).filter(font => font.name);
-    
-    // NEW: Extract system font stacks
-    const systemFontStacks = computedFonts
-      .filter(fontStack => 
-        fontStack.includes('system-ui') || 
-        fontStack.includes('-apple-system') ||
-        fontStack.includes('BlinkMacSystemFont') ||
-        fontStack.includes('Segoe UI') ||
-        fontStack.includes('Roboto') ||
-        fontStack.includes('Helvetica Neue') ||
-        fontStack.includes('Arial'))
-      .map(stack => ({ 
-        stack, 
-        type: 'system-font-stack' 
-      }));
-    
+    const computedFonts = Array.from(computedFontFamilies).map(name => ({
+      name,
+      type: 'computed-font'
+    }));
+
     return {
       googleFonts,
       adobeFonts,
@@ -315,13 +314,12 @@ async function detectFonts(url) {
       fontFaceDeclarations,
       preloadedFonts,
       cssImportFonts,
-      cssVarFonts,
-      fontApiLoaded,
       systemFontStacks,
-      computedFonts: cleanedComputedFonts
+      computedFonts
     };
-    
-  } finally {
-    await browser.close();
+
+  } catch (error) {
+    console.error('Error in detectFonts:', error);
+    throw error;
   }
 }

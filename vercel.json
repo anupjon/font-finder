@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "src/app/api/detect-fonts/route.js": {
+      "memory": 3008,
+      "maxDuration": 60
+    }
+  }
+}
